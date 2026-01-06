@@ -161,34 +161,34 @@ def make_lstm_model(seq_length, n_features, hidden_units=64):
 
 
 # 36-step rollout 예측 (y_true 오염 방지)
-def rollout_predict_36(model, df, feature_cols, target_col, scaler_x, scaler_y, seq_length=36, horizon=36, start_idx=None):
+def rollout_predict_36(model, df, feature_cols, target_col, scaler_x, scaler_y, seq_length=36, step=36, start_idx=None):
     """
-    1-step 모델(Dense(1))로 horizon(=36) 스텝을 순차 예측.
+    1-step 모델(Dense(1))로 step(=36) 을 순차 예측.
     feature_cols에 target_col 포함 필수.
     """
     if target_col not in feature_cols:
         raise ValueError("rollout 하려면 feature_cols에 target_col(수위)이 포함되어야 합니다.")
 
-    src = df.reset_index(drop=True)
-    T = len(src)
+    raw_data = df.reset_index(drop=True)
+    total_length = len(raw_data)
 
     if start_idx is None:
         start_idx = seq_length
 
-    if T < start_idx + horizon:
+    if total_length < start_idx + step:
         return None
 
     # 실제값은 원본에서 먼저 고정 (오염 방지)
-    y_true_36 = src.loc[start_idx:start_idx+horizon-1, target_col].to_numpy().astype(np.float32)
+    y_true_36 = raw_data.loc[start_idx:start_idx+step-1, target_col].to_numpy().astype(np.float32)
 
     # 예측용 복사본
-    work = src.copy()
+    src_copy = raw_data.copy()
 
     preds = []
-    for h in range(horizon):
-        t = start_idx + h
+    for s in range(step):
+        i = start_idx + s
 
-        X_win = work.loc[t-seq_length:t-1, feature_cols].to_numpy()
+        X_win = src_copy.loc[i-seq_length:i-1, feature_cols].to_numpy()
         X_scaled = scaler_x.transform(X_win).astype(np.float32).reshape(1, seq_length, len(feature_cols))
 
         pred_scaled = model.predict(X_scaled, verbose=0).reshape(-1, 1)  # (1,1)
@@ -196,8 +196,8 @@ def rollout_predict_36(model, df, feature_cols, target_col, scaler_x, scaler_y, 
 
         preds.append(float(pred))
 
-        # 다음 스텝 입력을 위해 예측 수위 피드백(예측용 work에만)
-        work.loc[t, target_col] = pred
+        # 다음 스텝 입력을 위해 예측 수위 피드백(예측용 pred_copy 에만)
+        src_copy.loc[i, target_col] = pred
 
     y_pred_36 = np.array(preds, dtype=np.float32)
     return y_pred_36, y_true_36
@@ -339,7 +339,7 @@ if __name__ == "__main__":
     #         print(f"[SKIP] {base} : 길이가 짧아 seq_length={seq_length} 윈도우 생성 불가")
     #         continue
 
-        out = rollout_predict_36(model, df, feature_cols, target_col, scaler_x, scaler_y, seq_length=seq_length, horizon=36)
+        out = rollout_predict_36(model, df, feature_cols, target_col, scaler_x, scaler_y, seq_length=seq_length, step=36)
 
         if out is None:
             print(f"[SKIP] {base} : 길이가 짧아 rollout 36-step 불가 (need >= {seq_length+36})")

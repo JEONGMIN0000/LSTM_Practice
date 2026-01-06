@@ -1,0 +1,324 @@
+import pandas as pd
+import numpy as np
+import tensorflow as tf
+import matplotlib
+import matplotlib.pyplot as plt
+import glob
+import os
+import re
+
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import mean_absolute_error, r2_score
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense
+from tensorflow.keras.callbacks import EarlyStopping
+
+matplotlib.rcParams['font.family'] = 'Malgun Gothic'
+matplotlib.rcParams['axes.unicode_minus'] = False
+
+
+# 데이터 로드 및 전처리
+def load_data(pattern):
+    file_list = glob.glob(pattern)
+
+    data = []
+
+    # dataset 이벤트 순서대로 
+    for path in sorted(
+        file_list,
+        key=lambda x: (
+            int(re.search(r'(\d{4})', os.path.basename(x)).group(1)),
+            int(re.search(r'(\d+)\s*번', os.path.basename(x)).group(1))
+        )):
+        df = pd.read_csv(path)
+        data.append(df)
+        print(f'[load] load: {path}, shape={df.shape}')
+
+    return data
+
+
+# 전처리 : time 정리 , 숫자 변환
+def preprocess(df, target_col):
+    df = df.copy()
+    
+    # time 컬럼 정리
+    if 'time' in df.columns:
+        df['time'] = pd.to_datetime(df['time'], errors='coerce')
+    else:
+        print('⚠ DateTime 컬럼이 없음.')
+
+    # 숫자형 변환(시간 제외 전부)
+    for c in df.columns:
+        if c != 'time':
+            df[c] = pd.to_numeric(df[c], errors='coerce')
+
+    missing = [c for c in [target_col] if c not in df.columns]
+    if missing:
+        raise ValueError(f"CSV에 필요한 컬럼이 없습니다: {missing}\n현재 컬럼: {list(df.columns)}")
+    
+    return df
+
+
+# 데이터셋 분리
+def split_dataset(data):
+    total_len = len(data)
+    train_len = int(total_len * 0.7)
+    valid_len = int(total_len * 0.2)
+
+    train = data[:train_len]
+    valid = data[train_len:train_len + valid_len]
+    test  = data[train_len + valid_len:]
+    print(f'[split events] total={total_len}, train={len(train)}, valid={len(valid)}, test={len(test)}')
+    return train, valid, test
+
+
+# MinMaxScaler 로 데이터 정규화
+def data_scalers(train_events, feature_cols, target_col):
+    scaler_x = MinMaxScaler(feature_range=(0, 1))
+    scaler_y = MinMaxScaler(feature_range=(0, 1))
+
+    X_concat = pd.concat([df[feature_cols] for df in train_events], axis=0)
+    y_concat = pd.concat([df[[target_col]] for df in train_events], axis=0)
+
+    scaler_x.fit(X_concat.values)
+    scaler_y.fit(y_concat.values)
+
+    return scaler_x, scaler_y
+
+
+
+# 데이터셋 생성
+#    X: (샘플, seq_len, n_features)     y: (샘플,)
+def create_dataset (df, feature_cols, target_col, scaler_x, scaler_y, seq_length) :
+
+    X_scaled = scaler_x.transform(df[feature_cols].values)  # (T, n_feat)
+    y_scaled = scaler_y.transform(df[[target_col]].values).reshape(-1)  # (T,)
+
+    X, y = [], []
+
+    start_t = seq_length
+    end_t = len(df) - seq_length + 1  
+
+
+    for i in range(start_t, end_t):
+        X.append(X_scaled[i-seq_length:i, :])      # 강수만 (seq_len, n_feat)
+        y.append(y_scaled[i:i+seq_length])         # 미래 36-step 수위 (seq_len,)
+    
+    return np.array(X, dtype=np.float32), np.array(y, dtype=np.float32) # (N,seq_length,n1) (N,seq_length)
+
+
+
+# 이벤트 여러개 -> X,y 합치기
+def build_xy(events, feature_cols, target_col, scaler_x, scaler_y, seq_length):
+    X_list, y_list = [], []
+    for df in events:
+        X, y = create_dataset(df, feature_cols, target_col, scaler_x, scaler_y, seq_length)
+        if len(X) == 0:
+            continue
+        X_list.append(X)
+        y_list.append(y)
+
+    X_all = np.concatenate(X_list, axis=0)
+    y_all = np.concatenate(y_list, axis=0)
+    return X_all, y_all
+
+
+# 모델 구축
+def build_lstm_model(seq_length, n_features, hidden_units=64):
+    """
+    단일 입력(관측/피처) 기반 단일 LSTM 시계열 예측 모델
+    입력:  (batch, seq_length, n_features)
+    출력:  (batch, seq_length)  # 예: 미래 36스텝 수위
+    """
+    inp = tf.keras.Input(shape=(seq_length, n_features), name="ts_input")
+
+    x = tf.keras.layers.LSTM(hidden_units, return_sequences=True)(inp)
+    x = tf.keras.layers.LSTM(hidden_units, return_sequences=False)(x)
+
+    x = tf.keras.layers.Dense(64, activation="relu")(x)
+    out = tf.keras.layers.Dense(seq_length, name="y_seq")(x)
+
+    model = tf.keras.Model(inputs=inp, outputs=out)
+    model.compile(optimizer=tf.keras.optimizers.Adam(1e-3), loss="mse")
+    model.summary()
+
+    return model
+
+
+def inverse_y(y_scaled_seq, scaler_y):
+    # y_scaled_seq: (N, H)
+    return scaler_y.inverse_transform(y_scaled_seq)
+
+
+
+def predict(model, df, feature_cols, target_col, scaler_x, scaler_y, seq_length, out_dir="./test_outputs", show=False):
+    os.makedirs(out_dir, exist_ok=True)
+
+    # 윈도우 생성
+    X, y = create_dataset(df, feature_cols, target_col, scaler_x, scaler_y, seq_length)
+    if len(X) == 0:
+        return None  # 데이터 길이가 짧아서 샘플이 안 만들어짐
+
+    # 예측
+    pred_scaled = model.predict(X, verbose=0)     # (N, seq_length)
+
+    # inverse
+    y_pred = inverse_y(pred_scaled, scaler_y)  # (N, seq_length)
+    y_true = inverse_y(y,          scaler_y)   # (N, seq_length)
+
+    y_true_flat = y_true.reshape(-1)
+    print("[실제값]",
+        "min=", float(y_true_flat.min()), # 전체 예측 구간에서 최소 수위 / 유량 / 값
+        "max=", float(y_true_flat.max()),
+        "std=", float(y_true_flat.std()),
+        "range=", float(y_true_flat.max() - y_true_flat.min()))
+
+    # 지표 (전체 36-step flatten)
+    mse  = np.mean((y_pred - y_true) ** 2)
+    mae  = mean_absolute_error(y_true.reshape(-1), y_pred.reshape(-1))
+    rmse = np.sqrt(mse)
+    r2   = r2_score(y_true.reshape(-1), y_pred.reshape(-1))
+    y_std = np.std(y_true.reshape(-1)) + 1e-12
+    nrmse = rmse / y_std
+
+    # 그래프: 대표 1개 샘플(가장 마지막)
+    k = -1
+    t = np.arange(seq_length)
+
+    plt.figure(figsize=(14, 5))
+    plt.plot(t, y_true[k], label="True")
+    plt.plot(t, y_pred[k], label="Pred")
+    plt.title("예측 그래프")
+    plt.xlabel("time")
+    plt.ylabel(target_col)
+    plt.legend()
+    plt.tight_layout()
+
+    # 파일명 안전화
+    return {
+        "mse": float(mse), "mae": float(mae), "rmse": float(rmse), "r2": float(r2), "nrmse": float(nrmse), 
+        "y_true": y_true, "y_pred": y_pred
+    }
+
+
+
+# 실행
+if __name__ == "__main__":
+    train_pattern = "./data/csv/*.csv"
+    test_pattern  = "./testdata/*.csv"  
+
+    target_col = "성남시(궁내교)_WL"
+    feature_cols = [
+        '성남시(한국학중앙연구원)','성남시(대장동)', '성남시(구미초교)','서울시(대곡교)',
+        '성남시(성남북초교)', '광주시(남한산초교)','궁내교_Ti', '대곡교_Ti'
+    ]
+
+    seq_length = 36
+
+
+    # -------------------------
+    # 1) 학습 데이터 로드/전처리
+    # -------------------------
+    train_raw = load_data(train_pattern)
+    train_events = [preprocess(df, target_col) for df in train_raw]
+
+    train_events, valid_events, _ = split_dataset(train_events)
+
+
+    # -------------------------
+    # 2) scaler는 train로만 fit
+    # -------------------------
+    scaler_x, scaler_y = data_scalers(train_events, feature_cols, target_col)
+
+
+
+    # -------------------------
+    # 3) 윈도우 생성 (train/valid)
+    # -------------------------
+    X_train, y_train = build_xy(train_events, feature_cols, target_col, scaler_x, scaler_y, seq_length)
+    X_valid, y_valid = build_xy(valid_events, feature_cols, target_col, scaler_x, scaler_y, seq_length)
+
+
+    print("X_train:", X_train.shape, "y_train:", y_train.shape)
+    print("X_valid:", X_valid.shape, "y_valid:", y_valid.shape)
+
+
+    # -------------------------
+    # 4) 모델 학습
+    # -------------------------
+    model = build_lstm_model(seq_length=seq_length, n_features=X_train.shape[2], hidden_units=64)
+
+    es = EarlyStopping(monitor="val_loss", patience=10, restore_best_weights=True)
+    history = model.fit(
+        X_train, y_train,
+        validation_data=(X_valid, y_valid),
+        epochs=100,
+        batch_size=32,
+        callbacks=[es],
+        verbose=1
+    )
+
+    # ✅ 학습 과정 Plotting
+    plt.figure(figsize=(25, 8))
+    plt.plot(history.history['loss'])
+    plt.plot(history.history['val_loss'])
+
+    print('[ Train Chart ]')
+    loss_min = min(history.history['val_loss'])
+    plt.ylim(0.0, loss_min * 10)
+
+    plt.ylabel('loss')
+    plt.xlabel('epoch')
+    plt.legend(['train', 'val'], loc='upper left')
+    # 그래프 저장
+    fig_path = f"./result_png/train_forecast.png"
+    plt.savefig(fig_path)
+    plt.close()
+
+
+    # -------------------------
+    # 5) 테스트 데이터 로드/전처리 (testdata 폴더) - 파일별 평가
+    # -------------------------
+    test_files = sorted(glob.glob(test_pattern))
+    print(f"[test] files={len(test_files)}")
+
+    results = []
+
+    for fp in test_files:
+        base = os.path.basename(fp)
+        df_raw = pd.read_csv(fp)
+        df = preprocess(df_raw, target_col)
+
+        res = predict(model, df, feature_cols, target_col, scaler_x, scaler_y, seq_length=seq_length, out_dir="./result_png", show=False)
+
+
+        if res is None:
+            print(f"[SKIP] {base} : 길이가 짧아 seq_length={seq_length} 윈도우 생성 불가")
+            continue
+
+        # 그래프 저장
+        safe_name = re.sub(r'[\\/:*?"<>|]+', "_", os.path.splitext(base)[0]) # 파일명에서 확장자를 제거
+        fig_path = f"./result_png/{safe_name}_forecast.png"
+        plt.savefig(fig_path)
+        plt.close()
+
+        print(f"\n[Test: {base}]")
+        print(f" MSE={res['mse']:.4f}, MAE={res['mae']:.4f}, RMSE={res['rmse']:.4f}, R2={res['r2']:.4f}")
+
+        results.append((base, res["mse"], res["mae"], res["rmse"], res["r2"]))
+
+    # 전체 요약(평균)
+    if results:
+        arr = np.array([r[1:] for r in results], dtype=float)
+        print("\n[SUMMARY] 파일별 지표 평균")
+        print(f" MSE={arr[:,0].mean():.4f}, MAE={arr[:,1].mean():.4f}, RMSE={arr[:,2].mean():.4f}, R2={arr[:,3].mean():.4f}")
+        
+
+
+
+
+
+
+
+
+

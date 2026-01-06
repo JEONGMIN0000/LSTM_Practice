@@ -103,9 +103,9 @@ def create_dataset (df, feature_cols, target_col, scaler_x, scaler_y, seq_length
     for i in range(start_t, end_t):
         X.append(X_scaled[i-seq_length:i, :])      # 강수만 (seq_len, n_feat)
         y.append(y_scaled[i:i+seq_length])         # 미래 36-step 수위 (seq_len,)
+
     
     return np.array(X, dtype=np.float32), np.array(y, dtype=np.float32) # (N,seq_length,n1) (N,seq_length)
-
 
 
 # 이벤트 여러개 -> X,y 합치기
@@ -145,12 +145,23 @@ def build_lstm_model(seq_length, n_features, hidden_units=64):
     return model
 
 
+# 모델 구축 2
+def make_lstm_model(seq_length, n_features, hidden_units=64):
+    #모델 세팅
+    model = Sequential()
+    model.add(LSTM(hidden_units, input_shape=(seq_length, n_features), return_sequences=False))# 마지막 hidden state만 사용
+    model.add(Dense(seq_length))
+    model.compile(loss='mean_squared_error', optimizer='adam')
+
+    return model
+
+
 def inverse_y(y_scaled_seq, scaler_y):
     # y_scaled_seq: (N, H)
     return scaler_y.inverse_transform(y_scaled_seq)
 
 
-
+# 예측
 def predict(model, df, feature_cols, target_col, scaler_x, scaler_y, seq_length, out_dir="./test_outputs", show=False):
     os.makedirs(out_dir, exist_ok=True)
 
@@ -246,7 +257,8 @@ if __name__ == "__main__":
     # -------------------------
     # 4) 모델 학습
     # -------------------------
-    model = build_lstm_model(seq_length=seq_length, n_features=X_train.shape[2], hidden_units=64)
+    # model = build_lstm_model(seq_length=seq_length, n_features=X_train.shape[2], hidden_units=64)
+    model = make_lstm_model(seq_length=seq_length, n_features=X_train.shape[2], hidden_units=64)
 
     es = EarlyStopping(monitor="val_loss", patience=10, restore_best_weights=True)
     history = model.fit(

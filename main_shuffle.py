@@ -229,11 +229,6 @@ def rollout_predict_36(model,df,feature_cols,target_col,scaler_x,scaler_y,seq_le
     return y_pred_36, y_true_36
 
 
-def inverse_y(y_scaled_seq, scaler_y):
-    # y_scaled_seq: (N, H)
-    return scaler_y.inverse_transform(y_scaled_seq)
-
-
 # 예측
 def predict(model,df,feature_cols,target_col,scaler_x,scaler_y,seq_length,out_dir="./test_outputs",show=False,):
 
@@ -249,8 +244,8 @@ def predict(model,df,feature_cols,target_col,scaler_x,scaler_y,seq_length,out_di
     pred_scaled = model.predict(X, verbose=0)  # (N, seq_length)
 
     # inverse
-    y_pred = inverse_y(pred_scaled, scaler_y)  # (N, seq_length)
-    y_true = inverse_y(y, scaler_y)  # (N, seq_length)
+    y_pred = scaler_y.inverse_transform(pred_scaled) # (N, seq_length)
+    y_true = scaler_y.inverse_transform(y)  # (N, seq_length)
 
     # y_true_flat = y_true.reshape(-1)
     # print("[실제값]",

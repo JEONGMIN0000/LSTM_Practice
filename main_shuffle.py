@@ -108,8 +108,8 @@ def create_dataset(df, feature_cols, target_col, scaler_x, scaler_y, seq_length)
 
     for i in range(start_t, end_t):
         X.append(X_scaled[i - seq_length : i, :])  # (seq_len, n_feat)
-        # y.append(y_scaled[i:i+seq_length])         # 미래 36-step 수위 (seq_len,)
-        y.append([y_scaled[i]])  # ✅ (1,)
+        # y.append(y_scaled[i:i+seq_length])         #  ✅ 36step 미래 36-step 수위 (seq_len,)
+        y.append([y_scaled[i]])  # ✅ 1step (1,)
 
     return np.array(X, dtype=np.float32), np.array(y, dtype=np.float32)  # (N,seq_length,n1) (N,seq_length)
 
@@ -182,13 +182,13 @@ def make_lstm_model(seq_length, n_features, learning_rate, dropout, hidden_units
 
     model = Sequential()
     model.add(LSTM(hidden_units,input_shape=(seq_length, n_features),return_sequences=False,dropout=dropout,recurrent_dropout=0.0))
-    model.add(Dense(1))
+    model.add(Dense(1)) # ✅ 1step
 
     # learning rate 조절 + gradient 폭주 방지 (rollout에서 특히 도움)
     opt = tf.keras.optimizers.Adam(learning_rate=learning_rate, clipnorm=1.0)
 
     # ✅ 기본 loss
-    # model.compile(loss="mean_squared_error", optimizer=opt)
+    model.compile(loss="mean_squared_error", optimizer=opt)
 
     # ✅ Huber (delta는 스케일에 따라 조절)
     # loss_fn = tf.keras.losses.Huber(delta=0.1)  # (0.01~0.1)
@@ -196,7 +196,7 @@ def make_lstm_model(seq_length, n_features, learning_rate, dropout, hidden_units
     # model.compile(loss=loss_fn, optimizer=opt)
 
     # ✅ 큰 수위 구간에 가중치
-    model.compile(loss=weighted_mse, optimizer=opt)
+    # model.compile(loss=weighted_mse, optimizer=opt)
 
 
     return model
@@ -266,38 +266,8 @@ def predict(model,df,feature_cols,target_col,scaler_x,scaler_y,seq_length,out_di
     y_pred = scaler_y.inverse_transform(pred_scaled) # (N, seq_length)
     y_true = scaler_y.inverse_transform(y)  # (N, seq_length)
 
-    # y_true_flat = y_true.reshape(-1)
-    # print("[실제값]",
-    #     "min=", float(y_true_flat.min()), # 전체 예측 구간에서 최소 수위 / 유량 / 값
-    #     "max=", float(y_true_flat.max()),
-    #     "std=", float(y_true_flat.std()),
-    #     "range=", float(y_true_flat.max() - y_true_flat.min()))
-
-    # 지표 (전체 36-step flatten)
-    mse = np.mean((y_pred - y_true) ** 2)
-    mae = mean_absolute_error(y_true.reshape(-1), y_pred.reshape(-1))
-    rmse = np.sqrt(mse)
-    r2 = r2_score(y_true.reshape(-1), y_pred.reshape(-1))
-    y_std = np.std(y_true.reshape(-1)) + 1e-12
-    nrmse = rmse / y_std
-
-    # 그래프: 대표 1개 샘플(가장 마지막)
-    k = -1
-    # t = np.arange(seq_length)
-    h = y_true.shape[1]
-    t = np.arange(h)
-
-    plt.figure(figsize=(14, 5))
-    plt.plot(t, y_true[k], label="True")
-    plt.plot(t, y_pred[k], label="Pred")
-    plt.title("예측 그래프")
-    plt.xlabel("time")
-    plt.ylabel(target_col)
-    plt.legend()
-    plt.tight_layout()
-
     # 파일명 안전화
-    return {"mse": float(mse),"mae": float(mae),"rmse": float(rmse),"r2": float(r2),"nrmse": float(nrmse),"y_true": y_true,"y_pred": y_pred,}
+    return y_pred, y_true
 
 
 # -------------------------
@@ -316,9 +286,9 @@ if __name__ == "__main__":
 
     # ---------- 변수 설정 -----------------------------------------------------------------------------------
     seq_length = 36
-    learning_rate = 1e-4  # 3e-4 = 0.0003 , 1e-4 = 0.0001
+    learning_rate = 3e-4  # 3e-4 = 0.0003 , 1e-4 = 0.0001
     dropout = 0.0
-    target = "dg" # gn / dg
+    target = "gn" # gn / dg
     #---------------------------------------------------------------------------------------------------------
 
     if target == "gn" :

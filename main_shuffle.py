@@ -168,6 +168,15 @@ def build_xy(events, feature_cols, target_col, scaler_x, scaler_y, seq_length):
 #     model.compile(loss='mean_squared_error', optimizer='adam')
 
 
+#큰 수위 구간에 가중치
+@tf.function
+def weighted_mse(y_true, y_pred):
+    # y_true, y_pred: (batch, 1), 
+    # 예: y_true가 0.7 이상(상대적으로 높은 수위)이면 가중치 3배
+    w = tf.where(y_true >= 0.7, 3.0, 1.0)
+    return tf.reduce_mean(w * tf.square(y_true - y_pred))
+
+
 #  모델 구축 Dense(1) + learning_rate, dropout
 def make_lstm_model(seq_length, n_features, learning_rate, dropout, hidden_units=64):
 
@@ -178,7 +187,17 @@ def make_lstm_model(seq_length, n_features, learning_rate, dropout, hidden_units
     # learning rate 조절 + gradient 폭주 방지 (rollout에서 특히 도움)
     opt = tf.keras.optimizers.Adam(learning_rate=learning_rate, clipnorm=1.0)
 
-    model.compile(loss="mean_squared_error", optimizer=opt)
+    # ✅ 기본 loss
+    # model.compile(loss="mean_squared_error", optimizer=opt)
+
+    # ✅ Huber (delta는 스케일에 따라 조절)
+    # loss_fn = tf.keras.losses.Huber(delta=0.01)  # (y가 0~1 스케일이면 0.01~0.1도 실험)
+
+    # model.compile(loss=loss_fn, optimizer=opt)
+
+    # ✅ 큰 수위 구간에 가중치
+    model.compile(loss=weighted_mse, optimizer=opt)
+
 
     return model
 
@@ -297,7 +316,7 @@ if __name__ == "__main__":
 
     # ---------- 변수 설정 -----------------------------------------------------------------------------------
     seq_length = 36
-    learning_rate = 3e-4
+    learning_rate = 3e-4  # 3e-4 = 0.0003 , 1e-4 = 0.0001
     dropout = 0.0
     target = "gn" #dg
     #---------------------------------------------------------------------------------------------------------

@@ -168,7 +168,7 @@ def build_xy(events, feature_cols, target_col, scaler_x, scaler_y, seq_length):
 #     model.compile(loss='mean_squared_error', optimizer='adam')
 
 
-#큰 수위 구간에 가중치
+#큰 수위 구간에 가중치 ( 가중치가 너무 크면 평상시 성능 저하 예상 - 2.0~5.0 범위에서 시작 추천 )
 @tf.function
 def weighted_mse(y_true, y_pred):
     # y_true, y_pred: (batch, 1), 
@@ -191,7 +191,7 @@ def make_lstm_model(seq_length, n_features, learning_rate, dropout, hidden_units
     # model.compile(loss="mean_squared_error", optimizer=opt)
 
     # ✅ Huber (delta는 스케일에 따라 조절)
-    # loss_fn = tf.keras.losses.Huber(delta=0.01)  # (y가 0~1 스케일이면 0.01~0.1도 실험)
+    # loss_fn = tf.keras.losses.Huber(delta=0.1)  # (0.01~0.1)
 
     # model.compile(loss=loss_fn, optimizer=opt)
 
@@ -316,9 +316,9 @@ if __name__ == "__main__":
 
     # ---------- 변수 설정 -----------------------------------------------------------------------------------
     seq_length = 36
-    learning_rate = 3e-4  # 3e-4 = 0.0003 , 1e-4 = 0.0001
+    learning_rate = 1e-4  # 3e-4 = 0.0003 , 1e-4 = 0.0001
     dropout = 0.0
-    target = "gn" #dg
+    target = "dg" # gn / dg
     #---------------------------------------------------------------------------------------------------------
 
     if target == "gn" :
@@ -377,7 +377,7 @@ if __name__ == "__main__":
     plt.xlabel("epoch")
     plt.legend(["train", "val"], loc="upper left")
     plt.tight_layout()
-    plt.savefig("./result_png/train_forecast36.png")
+    plt.savefig(f"./result_png/train_forecast_{target}.png")
     plt.close()
 
     # 5) 테스트 (파일별 36-step rollout 평가)
@@ -420,16 +420,16 @@ if __name__ == "__main__":
         plt.tight_layout()
 
         safe_name = re.sub(r'[\\/:*?"<>|]+', "_", os.path.splitext(base)[0])
-        fig_path = f"./result_png/{safe_name}_rollout36.png"
+        fig_path = f"./result_png/{safe_name}_{target}.png"
         plt.savefig(fig_path)
         plt.close()
 
         print(f"\n[ Test : {base} ]")
-        print(f" MSE = {mse:.4f}, MAE = {mae:.4f}, RMSE = {rmse:.4f}, R2 = {r2:.4f}")
+        print(f" R2 = {r2:.4f} , MSE = {mse:.4f} , MAE = {mae:.4f} , RMSE = {rmse:.4f}")
 
-        results.append((base, mse, mae, rmse, r2))
+        results.append((base, r2, mse, mae, rmse ))
 
     if results:
         arr = np.array([r[1:] for r in results], dtype=float)
         print("\n[ SUMMARY ] 파일별 지표 평균")
-        print(f" MSE = {arr[:,0].mean():.4f}, MAE = {arr[:,1].mean():.4f}, RMSE = {arr[:,2].mean():.4f}, R2 = {arr[:,3].mean():.4f}")
+        print(f" R2 = {arr[:,3].mean():.4f} , MSE = {arr[:,0].mean():.4f} , MAE = {arr[:,1].mean():.4f} , RMSE = {arr[:,2].mean():.4f} ")

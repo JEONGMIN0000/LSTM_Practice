@@ -270,6 +270,32 @@ def predict(model,df,feature_cols,target_col,scaler_x,scaler_y,seq_length,out_di
     return y_pred, y_true
 
 
+#그래프
+def drawCorrectionGraph(y_real, y_pred, pred_type, save_path):
+    plt.figure(figsize=(15, 6))
+
+    start = len(y_real) - len(y_pred)  # = 36
+
+    plt.axvline(start - 0.5, ls="--", c="gray")
+    plt.plot(y_real, c="blue")
+    plt.plot(range(start, start + len(y_pred)), y_pred, c="orange")
+
+    # 래프 스케일 고정
+    if "궁내교" in pred_type:
+        plt.ylim(0.7, 3.0)
+    elif "대곡교" in pred_type:
+        plt.ylim(1.5, 5.5)
+
+    plt.title(f"Tancheon {pred_type} Prediction")
+    plt.xlabel("step")
+    plt.ylabel(pred_type)
+    plt.legend(["pred start", "obs", "pred"])
+
+    plt.tight_layout()
+    plt.savefig(save_path)
+    plt.close()
+
+
 # -------------------------
 # 실행
 # -------------------------
@@ -281,10 +307,11 @@ if __name__ == "__main__":
     np.random.seed(SEED)
     tf.random.set_seed(SEED)
 
-    train_pattern = "./data/csv/*.csv"
+    # ---------- 변수 설정 -----------------------------------------------------------------------------------
+
+    train_pattern = "./data/csv_누적강우/*.csv"
     test_pattern = "./testdata/*.csv"
 
-    # ---------- 변수 설정 -----------------------------------------------------------------------------------
     seq_length = 36
     learning_rate = 3e-4  # 3e-4 = 0.0003 , 1e-4 = 0.0001
     dropout = 0.0
@@ -379,20 +406,38 @@ if __name__ == "__main__":
         rmse = float(np.sqrt(mse))
         r2 = float(r2_score(y_true_36, y_pred_36))
 
+        # # 그래프 저장
+        # plt.figure(figsize=(14, 5))
+        # plt.plot(y_true_36, label="True")
+        # plt.plot(y_pred_36, label="Pred")
+        # plt.title("36-step rollout 예측 그래프")
+        # plt.xlabel("step")
+        # plt.ylabel(target_col)
+        # plt.legend()
+        # plt.tight_layout()
+
+        # safe_name = re.sub(r'[\\/:*?"<>|]+', "_", os.path.splitext(base)[0])
+        # fig_path = f"./result_png/{safe_name}_{target}.png"
+        # plt.savefig(fig_path)
+        # plt.close()
+
         # 그래프 저장
-        plt.figure(figsize=(14, 5))
-        plt.plot(y_true_36, label="True")
-        plt.plot(y_pred_36, label="Pred")
-        plt.title("36-step rollout 예측 그래프")
-        plt.xlabel("step")
-        plt.ylabel(target_col)
-        plt.legend()
-        plt.tight_layout()
+        start_idx = seq_length
+
+        y_real = np.concatenate([
+            df.loc[start_idx-seq_length:start_idx-1, target_col].values,
+            y_true_36
+        ])
 
         safe_name = re.sub(r'[\\/:*?"<>|]+', "_", os.path.splitext(base)[0])
         fig_path = f"./result_png/{safe_name}_{target}.png"
-        plt.savefig(fig_path)
-        plt.close()
+
+        drawCorrectionGraph(
+            y_real=y_real,
+            y_pred=y_pred_36,
+            pred_type=target_col,
+            save_path=fig_path,
+        )
 
         print(f"\n[ Test : {base} ]")
         print(f" R2 = {r2:.4f} , MSE = {mse:.4f} , MAE = {mae:.4f} , RMSE = {rmse:.4f}")

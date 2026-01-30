@@ -297,7 +297,7 @@ def drawCorrectionGraph(y_real, y_pred, pred_type, save_path):
 
 
 # 결과 엑셀 저장
-def makeResultChart(data, base, testname, y_pred, r2, mse, mae, rmse):
+def makeResultChart(data,base, testname, y_pred, r2, mse, mae, rmse):
     # ------------------------------------------------------------------ 저장 경로
     # 파일명 안전 처리 (윈도우 특수문자 제거)
     safe_base = re.sub(r'[\\/:*?"<>|]+', "_", os.path.splitext(base)[0])
@@ -366,27 +366,29 @@ if __name__ == "__main__":
 
     # ---------- 변수 설정 -----------------------------------------------------------------------------------
 
-    testname = "관심수위"  # 관심수위 / 관심수위20
+    testname = "누적강우"  # 누적강우 / 누적강우20
     train_pattern = f"./data/csv_{testname}/*.csv"
-    test_pattern = "./testdata/*.csv"
+    test_pattern = "./testdata/누적강우/*.csv"
 
     seq_length = 36
     learning_rate = 3e-4  # 3e-4 = 0.0003 , 1e-4 = 0.0001
     dropout = 0.0
     target = "gn" # gn / dg
-    
+
     #---------------------------------------------------------------------------------------------------------
 
     if target == "gn" :
         target_col = "성남시(궁내교)_WL"
+        rain_col = '궁내교_누적강우'
     elif target == "dg" :
         target_col = "서울시(대곡교)_WL"
+        rain_col = '대곡교_누적강우'
     else :
         print("target 설정 오류")
 
     feature_cols = [
         "성남시(한국학중앙연구원)","성남시(대장동)","성남시(구미초교)","서울시(대곡교)","성남시(성남북초교)","광주시(남한산초교)",
-        "궁내교_Ti","대곡교_Ti",target_col,
+        "궁내교_Ti","대곡교_Ti", rain_col ,target_col
     ]
 
     # 1) 학습 데이터 로드/전처리
@@ -504,7 +506,6 @@ if __name__ == "__main__":
         results.append((base, r2, mse, mae, rmse ))
 
         makeResultChart(df, base, testname, y_pred_36, r2, mse, mae, rmse)
-
 
     if results:
         arr = np.array([r[1:] for r in results], dtype=float)
